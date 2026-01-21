@@ -137,22 +137,18 @@ func New(r io.Reader, opts ...Option) (*Reader, error) {
 		reader: bufio.NewReader(r),
 	}
 
-	// применяем опции
 	for _, opt := range opts {
 		opt(reader)
 	}
 
-	// читаем метаданные
 	if err := reader.readMetadata(); err != nil {
 		return nil, fmt.Errorf("read metadata: %w", err)
 	}
 
-	// если декодер не установлен явно, используем дефолтный
 	if reader.decoder == nil {
-		reader.decoder = charmap.CodePage866.NewDecoder()
+		return nil, fmt.Errorf("unable to determine encoding: please specify encoding explicitly using WithCP866(), WithCP1251() or WithEncoding()")
 	}
 
-	// читаем описания полей
 	if err := reader.readFields(); err != nil {
 		return nil, fmt.Errorf("read fields: %w", err)
 	}
@@ -191,7 +187,7 @@ func (r *Reader) FieldsCount() int {
 }
 
 func (r *Reader) readMetadata() error {
-	// читаем тип файла
+	// file type
 	b, err := r.reader.ReadByte()
 	if err != nil {
 		return fmt.Errorf("read file type: %w", err)
@@ -203,7 +199,7 @@ func (r *Reader) readMetadata() error {
 	}
 	r.fileType = fileType
 
-	// читаем дату последнего обновления (3 байта: YY MM DD)
+	// date last update (3 byte: YY MM DD)
 	dateBytes := make([]byte, 3)
 	if _, err := io.ReadFull(r.reader, dateBytes); err != nil {
 		return fmt.Errorf("read last update date: %w", err)
@@ -217,14 +213,14 @@ func (r *Reader) readMetadata() error {
 		time.UTC,
 	)
 
-	// читаем количество записей (4 байта, little-endian)
+	// record count (4 byte, little-endian)
 	recordsBytes := make([]byte, 4)
 	if _, err := io.ReadFull(r.reader, recordsBytes); err != nil {
 		return fmt.Errorf("read records count: %w", err)
 	}
 	r.recordsCount = binary.LittleEndian.Uint32(recordsBytes)
 
-	// читаем размер заголовка (2 байта, little-endian)
+	// header size (2 byte, little-endian)
 	headerBytes := make([]byte, 2)
 	if _, err := io.ReadFull(r.reader, headerBytes); err != nil {
 		return fmt.Errorf("read header size: %w", err)
@@ -232,21 +228,21 @@ func (r *Reader) readMetadata() error {
 	r.headerBytesNumber = binary.LittleEndian.Uint16(headerBytes)
 	r.fieldsCount = (r.headerBytesNumber - metadataLength) / fieldLength
 
-	// читаем размер записи (2 байта, little-endian)
+	// record size (2 bye, little-endian)
 	recordBytes := make([]byte, 2)
 	if _, err := io.ReadFull(r.reader, recordBytes); err != nil {
 		return fmt.Errorf("read record size: %w", err)
 	}
 	r.recordBytesNumber = binary.LittleEndian.Uint16(recordBytes)
 
-	// читаем reserved байты
+	// reserved byte
 	reserved := make([]byte, 20)
 	if _, err := io.ReadFull(r.reader, reserved); err != nil {
 		return fmt.Errorf("read reserved bytes: %w", err)
 	}
 
-	// байт 29 (индекс 17) - Language Driver ID
-	// если декодер не задан явно, пытаемся определить по LDID
+	// byte 29 (index 17) - Language Driver ID
+	// try to set decoder by LDID
 	if r.decoder == nil {
 		languageDriverID := reserved[17]
 		r.decoder = getDecoderByLDID(languageDriverID)
@@ -266,7 +262,7 @@ func (r *Reader) readFields() error {
 		r.fields = append(r.fields, field)
 	}
 
-	// проверяем терминатор (0x0D)
+	// end of file (0x0D)
 	terminator, err := r.reader.ReadByte()
 	if err != nil {
 		return fmt.Errorf("read terminator: %w", err)
@@ -284,7 +280,7 @@ func (r *Reader) readField() (Field, error) {
 		return Field{}, fmt.Errorf("read field bytes: %w", err)
 	}
 
-	// декодируем имя поля (первые 11 байт)
+	// filed name (11 byte)
 	nameBytes := bytes.TrimRight(fieldBytes[0:11], "\x00")
 	decodedName, err := r.decoder.Bytes(nameBytes)
 	if err != nil {
@@ -327,8 +323,7 @@ func getDecoderByLDID(ldid byte) *encoding.Decoder {
 	case 0x02: // CP850 (International MS-DOS)
 		return charmap.CodePage850.NewDecoder()
 	default:
-		// фоллбэк на CP866 для совместимости
-		return charmap.CodePage866.NewDecoder()
+		return nil
 	}
 }
 
@@ -369,7 +364,7 @@ func (r *Reader) Read() (*Record, error) {
 		return nil, r.err
 	}
 
-	// читаем всю запись целиком
+	// read all record
 	recordBytes := make([]byte, r.recordBytesNumber)
 	if _, err := io.ReadFull(r.reader, recordBytes); err != nil {
 		r.err = fmt.Errorf("read record bytes: %w", err)
@@ -377,17 +372,17 @@ func (r *Reader) Read() (*Record, error) {
 	}
 
 	record := &Record{
-		Deleted: recordBytes[0] == 0x2A, // '*' означает удалённую запись
+		Deleted: recordBytes[0] == 0x2A, // '*' for deleted records
 		Data:    make(map[string]string, len(r.fields)),
 	}
 
-	// парсим поля
-	offset := 1 // пропускаем первый байт (deletion flag)
+	// fields
+	offset := 1 // deletion flag
 	for _, field := range r.fields {
 		fieldData := recordBytes[offset : offset+int(field.Length)]
 		offset += int(field.Length)
 
-		// декодируем значение поля
+		// field value
 		value, err := r.decodeFieldValue(field, fieldData)
 		if err != nil {
 			r.err = fmt.Errorf("decode field %s: %w", field.Name, err)
@@ -426,24 +421,23 @@ func (r *Reader) Err() error {
 }
 
 func (r *Reader) decodeFieldValue(field Field, data []byte) (string, error) {
-	// убираем пробелы в начале и конце
 	trimmed := bytes.TrimSpace(data)
 
 	switch field.Type {
-	case 'C': // character - текст
+	case 'C': // character
 		decoded, err := r.decoder.Bytes(trimmed)
 		if err != nil {
 			return string(trimmed), nil // fallback на оригинал
 		}
 		return string(decoded), nil
 
-	case 'N', 'F': // numeric, Float - числа
+	case 'N', 'F': // numeric, Float
 		return string(trimmed), nil
 
-	case 'D': // date - дата в формате YYYYMMDD
+	case 'D': // date - format YYYYMMDD
 		return string(trimmed), nil
 
-	case 'L': // logical - булево значение
+	case 'L': // logical - boolean
 		if len(trimmed) > 0 {
 			switch trimmed[0] {
 			case 'T', 't', 'Y', 'y':
@@ -454,11 +448,11 @@ func (r *Reader) decodeFieldValue(field Field, data []byte) (string, error) {
 		}
 		return "", nil
 
-	case 'M': // memo - ссылка на memo-поле
+	case 'M': // memo
 		return string(trimmed), nil
 
 	default:
-		// неизвестный тип - пытаемся декодировать как текст
+		// unknown type - try to parse like string
 		decoded, err := r.decoder.Bytes(trimmed)
 		if err != nil {
 			return string(trimmed), nil
