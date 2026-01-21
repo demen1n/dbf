@@ -104,8 +104,8 @@ type Reader struct {
 
 	decoder       *encoding.Decoder
 	reader        *bufio.Reader
-	currentRecord uint32 // Текущая позиция для Next()
-	err           error  // Последняя ошибка при чтении
+	currentRecord uint32 // текущая позиция для Next()
+	err           error  // последняя ошибка при чтении
 }
 
 type Option func(*Reader)
