@@ -1,4 +1,4 @@
-module dbf
+module github.com/demen1n/dbf
 
 go 1.25
 
