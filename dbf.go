@@ -1,3 +1,29 @@
+// Package dbf provides functionality for reading DBF (dBase, FoxPro, Visual FoxPro) files.
+//
+// The package supports various DBF file formats and encodings, with automatic
+// encoding detection based on Language Driver ID when available.
+//
+// Basic usage:
+//
+//	reader, err := dbf.NewFromFile("data.dbf", dbf.WithCP866())
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//
+//	records, err := reader.ReadAll()
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//
+// For large files, use streaming to avoid loading everything into memory:
+//
+//	for reader.Next() {
+//		record, err := reader.Read()
+//		if err != nil {
+//			log.Fatal(err)
+//		}
+//		// process record
+//	}
 package dbf
 
 import (
@@ -13,8 +39,10 @@ import (
 	"golang.org/x/text/encoding/charmap"
 )
 
+// FileType represents the type of DBF file format.
 type FileType byte
 
+// String returns a human-readable description of the file type.
 func (ft FileType) String() string {
 	switch ft {
 	case FoxBASE:
@@ -46,6 +74,7 @@ func (ft FileType) String() string {
 	}
 }
 
+// Supported DBF file type constants.
 const (
 	FoxBASE             FileType = 0x02
 	FoxBASEPlusNoMemo   FileType = 0x03
@@ -62,18 +91,20 @@ const (
 )
 
 const (
-	metadataLength uint16 = 32
-	fieldLength    uint16 = 32
+	metadataLength uint16 = 32 // size of DBF file header in bytes
+	fieldLength    uint16 = 32 // size of field descriptor in bytes
 )
 
+// Field represents a single field definition in a DBF table.
 type Field struct {
-	Name          string
-	Type          byte
-	MemoryAddress uint32
-	Length        byte
-	DecimalCount  byte
+	Name          string // field name (max 11 characters)
+	Type          byte   // field type (C=Character, N=Numeric, D=Date, L=Logical, M=Memo, F=Float)
+	MemoryAddress uint32 // memory address (reserved, not used in file-based DBF)
+	Length        byte   // field length in bytes
+	DecimalCount  byte   // number of decimal places (for numeric fields)
 }
 
+// TypeString returns a human-readable description of the field type.
 func (f Field) TypeString() string {
 	switch f.Type {
 	case 'C':
@@ -93,6 +124,8 @@ func (f Field) TypeString() string {
 	}
 }
 
+// Reader provides methods for reading DBF files.
+// It supports both streaming (Next/Read) and batch (ReadAll) reading modes.
 type Reader struct {
 	fileType          FileType
 	lastUpdate        time.Time
@@ -104,51 +137,76 @@ type Reader struct {
 
 	decoder       *encoding.Decoder
 	reader        *bufio.Reader
-	currentRecord uint32 // текущая позиция для Next()
-	err           error  // последняя ошибка при чтении
+	currentRecord uint32 // current position for Next()
+	err           error  // last error during reading
 }
 
+// Option is a functional option for configuring a Reader.
 type Option func(*Reader)
 
+// WithDecoder sets a custom text encoding decoder for reading character fields.
+// This is the most flexible option, allowing any encoding.Decoder to be used.
 func WithDecoder(decoder *encoding.Decoder) Option {
 	return func(r *Reader) {
 		r.decoder = decoder
 	}
 }
 
+// WithEncoding sets the text encoding using a charmap.Charmap.
+// This is a convenience wrapper around WithDecoder.
 func WithEncoding(cm *charmap.Charmap) Option {
 	return WithDecoder(cm.NewDecoder())
 }
 
+// WithCP866 sets the encoding to Code Page 866 (Russian MS-DOS).
+// This is commonly used for Russian DBF files created in DOS.
 func WithCP866() Option {
 	return WithEncoding(charmap.CodePage866)
 }
 
+// WithCP1251 sets the encoding to Windows-1251 (Russian Windows).
+// This is commonly used for Russian DBF files created in Windows.
 func WithCP1251() Option {
 	return WithEncoding(charmap.Windows1251)
 }
 
+// WithCP1252 sets the encoding to Windows-1252 (Western European).
+// This is the default Windows encoding for Western European languages.
 func WithCP1252() Option {
 	return WithEncoding(charmap.Windows1252)
 }
 
+// New creates a new DBF Reader from an io.Reader.
+//
+// If no encoding is specified via options, the reader will attempt to
+// auto-detect the encoding from the Language Driver ID byte in the DBF header.
+// If auto-detection fails, an error is returned.
+//
+// Example:
+//
+//	file, _ := os.Open("data.dbf")
+//	reader, err := dbf.New(file, dbf.WithCP866())
 func New(r io.Reader, opts ...Option) (*Reader, error) {
 	reader := &Reader{
 		reader: bufio.NewReader(r),
 	}
 
+	// apply options
 	for _, opt := range opts {
 		opt(reader)
 	}
 
+	// read file metadata (header)
 	if err := reader.readMetadata(); err != nil {
 		return nil, fmt.Errorf("read metadata: %w", err)
 	}
 
+	// ensure we have an encoding
 	if reader.decoder == nil {
 		return nil, fmt.Errorf("unable to determine encoding: please specify encoding explicitly using WithCP866(), WithCP1251() or WithEncoding()")
 	}
 
+	// read field descriptors
 	if err := reader.readFields(); err != nil {
 		return nil, fmt.Errorf("read fields: %w", err)
 	}
@@ -156,6 +214,12 @@ func New(r io.Reader, opts ...Option) (*Reader, error) {
 	return reader, nil
 }
 
+// NewFromFile creates a new DBF Reader from a file path.
+// This is a convenience wrapper around New() for file-based reading.
+//
+// Example:
+//
+//	reader, err := dbf.NewFromFile("data.dbf", dbf.WithCP866())
 func NewFromFile(path string, opts ...Option) (*Reader, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -166,28 +230,35 @@ func NewFromFile(path string, opts ...Option) (*Reader, error) {
 	return New(file, opts...)
 }
 
+// FileType returns the DBF file type identifier.
 func (r *Reader) FileType() FileType {
 	return r.fileType
 }
 
+// LastUpdate returns the date when the DBF file was last modified.
 func (r *Reader) LastUpdate() time.Time {
 	return r.lastUpdate
 }
 
+// RecordsCount returns the total number of records in the DBF file,
+// including deleted records.
 func (r *Reader) RecordsCount() uint32 {
 	return r.recordsCount
 }
 
+// Fields returns the field definitions for the DBF table.
 func (r *Reader) Fields() []Field {
 	return r.fields
 }
 
+// FieldsCount returns the number of fields in the DBF table.
 func (r *Reader) FieldsCount() int {
 	return len(r.fields)
 }
 
+// readMetadata reads and parses the 32-byte DBF file header.
 func (r *Reader) readMetadata() error {
-	// file type
+	// read file type (1 byte)
 	b, err := r.reader.ReadByte()
 	if err != nil {
 		return fmt.Errorf("read file type: %w", err)
@@ -199,7 +270,7 @@ func (r *Reader) readMetadata() error {
 	}
 	r.fileType = fileType
 
-	// date last update (3 byte: YY MM DD)
+	// read last update date (3 bytes: YY MM DD)
 	dateBytes := make([]byte, 3)
 	if _, err := io.ReadFull(r.reader, dateBytes); err != nil {
 		return fmt.Errorf("read last update date: %w", err)
@@ -213,14 +284,14 @@ func (r *Reader) readMetadata() error {
 		time.UTC,
 	)
 
-	// record count (4 byte, little-endian)
+	// read record count (4 bytes, little-endian)
 	recordsBytes := make([]byte, 4)
 	if _, err := io.ReadFull(r.reader, recordsBytes); err != nil {
 		return fmt.Errorf("read records count: %w", err)
 	}
 	r.recordsCount = binary.LittleEndian.Uint32(recordsBytes)
 
-	// header size (2 byte, little-endian)
+	// read header size (2 bytes, little-endian)
 	headerBytes := make([]byte, 2)
 	if _, err := io.ReadFull(r.reader, headerBytes); err != nil {
 		return fmt.Errorf("read header size: %w", err)
@@ -228,21 +299,21 @@ func (r *Reader) readMetadata() error {
 	r.headerBytesNumber = binary.LittleEndian.Uint16(headerBytes)
 	r.fieldsCount = (r.headerBytesNumber - metadataLength) / fieldLength
 
-	// record size (2 bye, little-endian)
+	// read record size (2 bytes, little-endian)
 	recordBytes := make([]byte, 2)
 	if _, err := io.ReadFull(r.reader, recordBytes); err != nil {
 		return fmt.Errorf("read record size: %w", err)
 	}
 	r.recordBytesNumber = binary.LittleEndian.Uint16(recordBytes)
 
-	// reserved byte
+	// read reserved bytes (20 bytes)
 	reserved := make([]byte, 20)
 	if _, err := io.ReadFull(r.reader, reserved); err != nil {
 		return fmt.Errorf("read reserved bytes: %w", err)
 	}
 
-	// byte 29 (index 17) - Language Driver ID
-	// try to set decoder by LDID
+	// byte 29 (index 17) contains the Language Driver ID
+	// try to auto-detect encoding if not explicitly set
 	if r.decoder == nil {
 		languageDriverID := reserved[17]
 		r.decoder = getDecoderByLDID(languageDriverID)
@@ -251,6 +322,7 @@ func (r *Reader) readMetadata() error {
 	return nil
 }
 
+// readFields reads all field descriptors from the DBF header.
 func (r *Reader) readFields() error {
 	r.fields = make([]Field, 0, r.fieldsCount)
 
@@ -262,7 +334,7 @@ func (r *Reader) readFields() error {
 		r.fields = append(r.fields, field)
 	}
 
-	// end of file (0x0D)
+	// read field descriptor terminator (0x0D)
 	terminator, err := r.reader.ReadByte()
 	if err != nil {
 		return fmt.Errorf("read terminator: %w", err)
@@ -274,17 +346,18 @@ func (r *Reader) readFields() error {
 	return nil
 }
 
+// readField reads a single 32-byte field descriptor.
 func (r *Reader) readField() (Field, error) {
 	fieldBytes := make([]byte, 32)
 	if _, err := io.ReadFull(r.reader, fieldBytes); err != nil {
 		return Field{}, fmt.Errorf("read field bytes: %w", err)
 	}
 
-	// filed name (11 byte)
+	// field name (11 bytes, null-terminated)
 	nameBytes := bytes.TrimRight(fieldBytes[0:11], "\x00")
 	decodedName, err := r.decoder.Bytes(nameBytes)
 	if err != nil {
-		// если не получается декодировать, используем как есть
+		// if decoding fails, use the raw bytes
 		decodedName = nameBytes
 	}
 
@@ -299,6 +372,7 @@ func (r *Reader) readField() (Field, error) {
 	return field, nil
 }
 
+// isValidFileType checks if the given file type is recognized.
 func isValidFileType(ft FileType) bool {
 	switch ft {
 	case FoxBASE, FoxBASEPlusNoMemo, VisualFoxPro, VisualFoxProAI,
@@ -310,6 +384,9 @@ func isValidFileType(ft FileType) bool {
 	}
 }
 
+// getDecoderByLDID returns an appropriate text decoder based on the
+// Language Driver ID byte from the DBF header.
+// Returns nil if the Language Driver ID is not recognized.
 func getDecoderByLDID(ldid byte) *encoding.Decoder {
 	switch ldid {
 	case 0x26: // CP866 (Russian MS-DOS)
@@ -327,6 +404,7 @@ func getDecoderByLDID(ldid byte) *encoding.Decoder {
 	}
 }
 
+// String returns a string representation of the Reader for debugging.
 func (r *Reader) String() string {
 	return fmt.Sprintf(
 		"DBF Reader:\n"+
@@ -345,11 +423,28 @@ func (r *Reader) String() string {
 	)
 }
 
+// Record represents a single record from the DBF file.
 type Record struct {
-	Deleted bool              // флаг удаления (первый байт записи)
-	Data    map[string]string // данные полей (имя -> значение)
+	Deleted bool              // true if the record is marked as deleted
+	Data    map[string]string // field values indexed by field name
 }
 
+// Next advances to the next record in the DBF file.
+// It returns false when there are no more records or an error occurred.
+// Use Err() to check for errors after the iteration completes.
+//
+// Example:
+//
+//	for reader.Next() {
+//		record, err := reader.Read()
+//		if err != nil {
+//			log.Fatal(err)
+//		}
+//		// process record
+//	}
+//	if err := reader.Err(); err != nil {
+//		log.Fatal(err)
+//	}
 func (r *Reader) Next() bool {
 	if r.currentRecord >= r.recordsCount {
 		return false
@@ -359,12 +454,14 @@ func (r *Reader) Next() bool {
 	return r.err == nil
 }
 
+// Read reads the current record. Must be called after a successful Next() call.
+// Returns an error if reading fails or if called without a prior Next() call.
 func (r *Reader) Read() (*Record, error) {
 	if r.err != nil {
 		return nil, r.err
 	}
 
-	// read all record
+	// read the entire record
 	recordBytes := make([]byte, r.recordBytesNumber)
 	if _, err := io.ReadFull(r.reader, recordBytes); err != nil {
 		r.err = fmt.Errorf("read record bytes: %w", err)
@@ -372,17 +469,17 @@ func (r *Reader) Read() (*Record, error) {
 	}
 
 	record := &Record{
-		Deleted: recordBytes[0] == 0x2A, // '*' for deleted records
+		Deleted: recordBytes[0] == 0x2A, // '*' marks deleted records
 		Data:    make(map[string]string, len(r.fields)),
 	}
 
-	// fields
-	offset := 1 // deletion flag
+	// parse individual fields
+	offset := 1 // skip deletion flag
 	for _, field := range r.fields {
 		fieldData := recordBytes[offset : offset+int(field.Length)]
 		offset += int(field.Length)
 
-		// field value
+		// decode field value
 		value, err := r.decodeFieldValue(field, fieldData)
 		if err != nil {
 			r.err = fmt.Errorf("decode field %s: %w", field.Name, err)
@@ -395,6 +492,19 @@ func (r *Reader) Read() (*Record, error) {
 	return record, nil
 }
 
+// ReadAll reads all records from the DBF file into memory.
+// This is convenient for small files but may consume significant memory for large files.
+// For large files, consider using Next()/Read() for streaming access.
+//
+// Example:
+//
+//	records, err := reader.ReadAll()
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	for _, record := range records {
+//		fmt.Println(record.Data["NAME"])
+//	}
 func (r *Reader) ReadAll() ([]*Record, error) {
 	records := make([]*Record, 0, r.recordsCount)
 
@@ -413,6 +523,9 @@ func (r *Reader) ReadAll() ([]*Record, error) {
 	return records, nil
 }
 
+// Err returns any error that occurred during iteration.
+// It should be called after Next() returns false to check for errors.
+// Returns nil if iteration completed successfully (io.EOF is not returned).
 func (r *Reader) Err() error {
 	if r.err == io.EOF {
 		return nil
@@ -420,24 +533,25 @@ func (r *Reader) Err() error {
 	return r.err
 }
 
+// decodeFieldValue decodes a field's raw bytes into a string based on its type.
 func (r *Reader) decodeFieldValue(field Field, data []byte) (string, error) {
 	trimmed := bytes.TrimSpace(data)
 
 	switch field.Type {
-	case 'C': // character
+	case 'C': // character field
 		decoded, err := r.decoder.Bytes(trimmed)
 		if err != nil {
-			return string(trimmed), nil // fallback на оригинал
+			return string(trimmed), nil // fallback to raw bytes
 		}
 		return string(decoded), nil
 
-	case 'N', 'F': // numeric, Float
+	case 'N', 'F': // numeric and Float fields
 		return string(trimmed), nil
 
-	case 'D': // date - format YYYYMMDD
+	case 'D': // date field (format: YYYYMMDD)
 		return string(trimmed), nil
 
-	case 'L': // logical - boolean
+	case 'L': // logical field (boolean)
 		if len(trimmed) > 0 {
 			switch trimmed[0] {
 			case 'T', 't', 'Y', 'y':
@@ -448,11 +562,10 @@ func (r *Reader) decodeFieldValue(field Field, data []byte) (string, error) {
 		}
 		return "", nil
 
-	case 'M': // memo
+	case 'M': // memo field (reference to external memo file)
 		return string(trimmed), nil
 
-	default:
-		// unknown type - try to parse like string
+	default: // unknown field type - try to decode as character
 		decoded, err := r.decoder.Bytes(trimmed)
 		if err != nil {
 			return string(trimmed), nil
