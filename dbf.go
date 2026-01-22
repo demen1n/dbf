@@ -9,6 +9,7 @@
 //	if err != nil {
 //		log.Fatal(err)
 //	}
+//	defer reader.Close()
 //
 //	records, err := reader.ReadAll()
 //	if err != nil {
@@ -139,6 +140,8 @@ type Reader struct {
 	reader        *bufio.Reader
 	currentRecord uint32 // current position for Next()
 	err           error  // last error during reading
+
+	file *os.file
 }
 
 // Option is a functional option for configuring a Reader.
@@ -225,9 +228,15 @@ func NewFromFile(path string, opts ...Option) (*Reader, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open file: %w", err)
 	}
-	defer file.Close()
 
-	return New(file, opts...)
+	reader, err := New(file, opts...)
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+
+	reader.file = file
+	return reader, nil
 }
 
 // FileType returns the DBF file type identifier.
@@ -572,4 +581,11 @@ func (r *Reader) decodeFieldValue(field Field, data []byte) (string, error) {
 		}
 		return string(decoded), nil
 	}
+}
+
+func (r *Reader) Close() error {
+	if r.file != nil {
+		return r.file.Close()
+	}
+	return nil
 }
