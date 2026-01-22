@@ -141,7 +141,7 @@ type Reader struct {
 	currentRecord uint32 // current position for Next()
 	err           error  // last error during reading
 
-	file *os.file
+	file *os.File
 }
 
 // Option is a functional option for configuring a Reader.
