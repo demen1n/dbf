@@ -706,6 +706,190 @@ func TestReadWithoutNext(t *testing.T) {
 	}
 }
 
+func TestWithCP1252(t *testing.T) {
+	data := createMinimalDBF()
+	_, err := New(bytes.NewReader(data), WithCP1252())
+	if err != nil {
+		t.Fatalf("New() with WithCP1252() failed: %v", err)
+	}
+}
+
+func TestFileTypeStringAllVariants(t *testing.T) {
+	tests := []struct {
+		ft       FileType
+		contains string
+	}{
+		{FoxBASE, "FoxBASE"},
+		{FoxBASEPlusNoMemo, "no memo"},
+		{VisualFoxPro, "Visual FoxPro"},
+		{VisualFoxProAI, "autoincrement"},
+		{VisualFoxProVarchar, "Varchar"},
+		{dBASEIVTF, "SQL table"},
+		{dBASEIVSF, "SQL system"},
+		{FoxBASEPlusMemo, "with memo"},
+		{dBASEIVMemo, "dBASE IV with memo"},
+		{dBASEIVTFMemo, "SQL table files with memo"},
+		{FoxPro2, "FoxPro 2"},
+		{HiPerSix, "HiPer-Six"},
+		{FileType(0xAB), "Unknown"},
+	}
+	for _, tt := range tests {
+		s := tt.ft.String()
+		if !strings.Contains(s, tt.contains) {
+			t.Errorf("FileType(0x%02X).String() = %q, want it to contain %q", byte(tt.ft), s, tt.contains)
+		}
+	}
+}
+
+func TestGetDecoderByLDID(t *testing.T) {
+	ldids := []byte{0x26, 0x64, 0x65, 0xC9, 0x03, 0x01, 0x02}
+	for _, ldid := range ldids {
+		if getDecoderByLDID(ldid) == nil {
+			t.Errorf("getDecoderByLDID(0x%02X) returned nil, want decoder", ldid)
+		}
+	}
+	if getDecoderByLDID(0xFF) != nil {
+		t.Error("getDecoderByLDID(0xFF) should return nil for unknown LDID")
+	}
+}
+
+// createDBFWithLogicalAndFloat builds a DBF with L, F, M field types.
+func createDBFWithLogicalAndFloat() []byte {
+	buf := new(bytes.Buffer)
+
+	buf.WriteByte(0x03)
+	buf.WriteByte(124)
+	buf.WriteByte(1)
+	buf.WriteByte(15)
+
+	// 6 records, 3 fields: ACTIVE(L,1), SCORE(F,8), NOTE(M,10)
+	binary.Write(buf, binary.LittleEndian, uint32(6))
+	binary.Write(buf, binary.LittleEndian, uint16(32+32*3+1))
+	binary.Write(buf, binary.LittleEndian, uint16(1+1+8+10))
+	buf.Write(make([]byte, 20))
+
+	writeField := func(name string, typ byte, length byte) {
+		b := make([]byte, 11)
+		copy(b, name)
+		buf.Write(b)
+		buf.WriteByte(typ)
+		buf.Write(make([]byte, 4))
+		buf.WriteByte(length)
+		buf.WriteByte(0)
+		buf.Write(make([]byte, 14))
+	}
+	writeField("ACTIVE", 'L', 1)
+	writeField("SCORE", 'F', 8)
+	writeField("NOTE", 'M', 10)
+	buf.WriteByte(0x0D)
+
+	writeRecord := func(flag byte, active string, score string, note string) {
+		buf.WriteByte(flag)
+		buf.WriteString(active)
+		buf.WriteString(score)
+		buf.WriteString(note)
+	}
+	writeRecord(0x20, "T", "  3.14  ", "memo1     ")
+	writeRecord(0x20, "t", "  2.71  ", "memo2     ")
+	writeRecord(0x20, "Y", "  1.00  ", "          ")
+	writeRecord(0x20, "F", "  0.00  ", "          ")
+	writeRecord(0x20, "N", "  0.00  ", "          ")
+	writeRecord(0x20, " ", "  0.00  ", "          ") // unknown logical value
+
+	return buf.Bytes()
+}
+
+func TestDecodeFieldValueLogicalAndFloat(t *testing.T) {
+	data := createDBFWithLogicalAndFloat()
+	r, err := New(bytes.NewReader(data), WithCP866())
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	records, err := r.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll() failed: %v", err)
+	}
+	if len(records) != 6 {
+		t.Fatalf("Expected 6 records, got %d", len(records))
+	}
+
+	trueCases := []int{0, 1, 2}
+	falseCases := []int{3, 4}
+	for _, i := range trueCases {
+		if records[i].Data["ACTIVE"] != "true" {
+			t.Errorf("record[%d] ACTIVE: expected \"true\", got %q", i, records[i].Data["ACTIVE"])
+		}
+	}
+	for _, i := range falseCases {
+		if records[i].Data["ACTIVE"] != "false" {
+			t.Errorf("record[%d] ACTIVE: expected \"false\", got %q", i, records[i].Data["ACTIVE"])
+		}
+	}
+	// unknown logical value → empty string
+	if records[5].Data["ACTIVE"] != "" {
+		t.Errorf("record[5] ACTIVE: expected \"\", got %q", records[5].Data["ACTIVE"])
+	}
+
+	// Float field returned as trimmed string
+	score := strings.TrimSpace(records[0].Data["SCORE"])
+	if score != "3.14" {
+		t.Errorf("record[0] SCORE: expected \"3.14\", got %q", score)
+	}
+
+	// Memo field returned as trimmed string
+	note := strings.TrimSpace(records[0].Data["NOTE"])
+	if note != "memo1" {
+		t.Errorf("record[0] NOTE: expected \"memo1\", got %q", note)
+	}
+}
+
+func TestNewFromFileNotFound(t *testing.T) {
+	_, err := NewFromFile("/nonexistent/path/file.dbf", WithCP866())
+	if err == nil {
+		t.Error("Expected error for non-existent file, got nil")
+	}
+}
+
+func TestNewFromFileAndClose(t *testing.T) {
+	r, err := NewFromFile("test.dbf", WithCP866())
+	if err != nil {
+		t.Skip("test.dbf not available:", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Errorf("Close() returned error: %v", err)
+	}
+}
+
+func TestCloseWithoutFile(t *testing.T) {
+	data := createMinimalDBF()
+	r, err := New(bytes.NewReader(data), WithCP866())
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Errorf("Close() on io.Reader-backed reader returned error: %v", err)
+	}
+}
+
+func TestErrAfterIOEOF(t *testing.T) {
+	data := createMinimalDBF()
+	// truncate one record to force io.EOF mid-read
+	truncated := data[:len(data)-5]
+	r, err := New(bytes.NewReader(truncated), WithCP866())
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	// exhaust records — second Read will hit EOF
+	for r.Next() {
+		r.Read() //nolint
+	}
+	// Err() must not expose io.EOF
+	if err := r.Err(); err != nil && err.Error() == "EOF" {
+		t.Error("Err() must not return raw io.EOF")
+	}
+}
+
 // Benchmark tests
 func BenchmarkNew(b *testing.B) {
 	data := createMinimalDBF()
