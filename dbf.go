@@ -285,6 +285,7 @@ func (r *Reader) readMetadata() error {
 		return fmt.Errorf("read last update date: %w", err)
 	}
 
+	// dBase stores year as offset from 1900; valid range is 1900–2155
 	r.lastUpdate = time.Date(
 		int(dateBytes[0])+1900,
 		time.Month(dateBytes[1]),
@@ -306,6 +307,9 @@ func (r *Reader) readMetadata() error {
 		return fmt.Errorf("read header size: %w", err)
 	}
 	r.headerBytesNumber = binary.LittleEndian.Uint16(headerBytes)
+	if r.headerBytesNumber < metadataLength {
+		return fmt.Errorf("invalid header size: %d (must be >= %d)", r.headerBytesNumber, metadataLength)
+	}
 	r.fieldsCount = (r.headerBytesNumber - metadataLength) / fieldLength
 
 	// read record size (2 bytes, little-endian)
@@ -314,6 +318,9 @@ func (r *Reader) readMetadata() error {
 		return fmt.Errorf("read record size: %w", err)
 	}
 	r.recordBytesNumber = binary.LittleEndian.Uint16(recordBytes)
+	if r.recordBytesNumber == 0 {
+		return fmt.Errorf("invalid record size: 0")
+	}
 
 	// read reserved bytes (20 bytes)
 	reserved := make([]byte, 20)
@@ -469,6 +476,9 @@ func (r *Reader) Read() (*Record, error) {
 	if r.err != nil {
 		return nil, r.err
 	}
+	if r.currentRecord == 0 {
+		return nil, fmt.Errorf("Read called before Next")
+	}
 
 	// read the entire record
 	recordBytes := make([]byte, r.recordBytesNumber)
@@ -485,7 +495,12 @@ func (r *Reader) Read() (*Record, error) {
 	// parse individual fields
 	offset := 1 // skip deletion flag
 	for _, field := range r.fields {
-		fieldData := recordBytes[offset : offset+int(field.Length)]
+		end := offset + int(field.Length)
+		if end > len(recordBytes) {
+			r.err = fmt.Errorf("field %s exceeds record bounds (offset %d + length %d > record size %d)", field.Name, offset, field.Length, len(recordBytes))
+			return nil, r.err
+		}
+		fieldData := recordBytes[offset:end]
 		offset += int(field.Length)
 
 		// decode field value

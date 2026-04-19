@@ -621,6 +621,91 @@ func TestZeroRecords(t *testing.T) {
 	}
 }
 
+func TestInvalidHeaderSize(t *testing.T) {
+	buf := new(bytes.Buffer)
+	buf.WriteByte(0x03)
+	buf.Write(make([]byte, 3))  // date
+	buf.Write(make([]byte, 4))  // record count
+	binary.Write(buf, binary.LittleEndian, uint16(10)) // header < 32 (metadataLength)
+	binary.Write(buf, binary.LittleEndian, uint16(11)) // record size
+	buf.Write(make([]byte, 20))
+
+	_, err := New(bytes.NewReader(buf.Bytes()), WithCP866())
+	if err == nil {
+		t.Error("Expected error for header size < 32, got nil")
+	}
+}
+
+func TestZeroRecordSize(t *testing.T) {
+	buf := new(bytes.Buffer)
+	buf.WriteByte(0x03)
+	buf.Write(make([]byte, 3))
+	binary.Write(buf, binary.LittleEndian, uint32(1))
+	binary.Write(buf, binary.LittleEndian, uint16(32+32+1))
+	binary.Write(buf, binary.LittleEndian, uint16(0)) // record size = 0
+	buf.Write(make([]byte, 20))
+
+	_, err := New(bytes.NewReader(buf.Bytes()), WithCP866())
+	if err == nil {
+		t.Error("Expected error for record size = 0, got nil")
+	}
+}
+
+func TestFieldExceedsRecordBounds(t *testing.T) {
+	buf := new(bytes.Buffer)
+
+	buf.WriteByte(0x03)
+	buf.WriteByte(124)
+	buf.WriteByte(1)
+	buf.WriteByte(15)
+
+	binary.Write(buf, binary.LittleEndian, uint32(1))          // 1 record
+	binary.Write(buf, binary.LittleEndian, uint16(32+32+1))    // 1 field
+	binary.Write(buf, binary.LittleEndian, uint16(5))          // record size = 5 (too small for 1+10)
+	buf.Write(make([]byte, 20))
+
+	// field with length=10, but record only has 4 bytes after deletion flag
+	name := append([]byte("NAME"), make([]byte, 7)...)
+	buf.Write(name)
+	buf.WriteByte('C')
+	buf.Write(make([]byte, 4))
+	buf.WriteByte(10) // length > available space
+	buf.WriteByte(0)
+	buf.Write(make([]byte, 14))
+	buf.WriteByte(0x0D)
+
+	// record bytes (5 bytes)
+	buf.Write(make([]byte, 5))
+
+	reader, err := New(bytes.NewReader(buf.Bytes()), WithCP866())
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	if !reader.Next() {
+		t.Fatal("Next() returned false")
+	}
+	_, err = reader.Read()
+	if err == nil {
+		t.Error("Expected error when field exceeds record bounds, got nil")
+	}
+}
+
+func TestReadWithoutNext(t *testing.T) {
+	data := createMinimalDBF()
+	reader := bytes.NewReader(data)
+
+	dbf, err := New(reader, WithCP866())
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	_, err = dbf.Read()
+	if err == nil {
+		t.Error("Expected error when Read called before Next, got nil")
+	}
+}
+
 // Benchmark tests
 func BenchmarkNew(b *testing.B) {
 	data := createMinimalDBF()

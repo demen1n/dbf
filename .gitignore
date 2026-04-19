@@ -1,3 +1,5 @@
 .idea
 cmd
 *.dbf
+CLAUDE.md
+*.out
