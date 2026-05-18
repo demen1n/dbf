@@ -634,7 +634,9 @@ func (r *Reader) decodeFieldValue(field Field, data []byte) (string, error) {
 
 func (r *Reader) Close() error {
 	if r.file != nil {
-		return r.file.Close()
+		err := r.file.Close()
+		r.file = nil
+		return err
 	}
 	return nil
 }

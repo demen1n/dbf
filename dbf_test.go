@@ -861,6 +861,19 @@ func TestNewFromFileAndClose(t *testing.T) {
 	}
 }
 
+func TestCloseIdempotent(t *testing.T) {
+	r, err := NewFromFile("test.dbf", WithCP866())
+	if err != nil {
+		t.Skip("test.dbf not available:", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("first Close() error: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Errorf("second Close() should be a no-op, got: %v", err)
+	}
+}
+
 func TestCloseWithoutFile(t *testing.T) {
 	data := createMinimalDBF()
 	r, err := New(bytes.NewReader(data), WithCP866())
