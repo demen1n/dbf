@@ -631,23 +631,22 @@ func (r *Reader) Err() error {
 
 // decodeFieldValue decodes a field's raw bytes into a string based on its type.
 func (r *Reader) decodeFieldValue(field Field, data []byte) (string, error) {
-	trimmed := bytes.TrimSpace(data)
-
 	switch field.Type {
-	case 'C': // character field
-		decoded, err := r.decoder.Bytes(trimmed)
+	case 'C': // character field: decode to UTF-8 first, then trim trailing spaces
+		decoded, err := r.decoder.Bytes(data)
 		if err != nil {
-			return string(trimmed), nil // fallback to raw bytes
+			return string(bytes.TrimRight(data, " ")), nil
 		}
-		return string(decoded), nil
+		return string(bytes.TrimRight(decoded, " ")), nil
 
-	case 'N', 'F': // numeric and Float fields
-		return string(trimmed), nil
+	case 'N', 'F': // numeric and Float fields (ASCII only)
+		return string(bytes.TrimSpace(data)), nil
 
-	case 'D': // date field (format: YYYYMMDD)
-		return string(trimmed), nil
+	case 'D': // date field (format: YYYYMMDD, ASCII only)
+		return string(bytes.TrimSpace(data)), nil
 
 	case 'L': // logical field (boolean)
+		trimmed := bytes.TrimSpace(data)
 		if len(trimmed) > 0 {
 			switch trimmed[0] {
 			case 'T', 't', 'Y', 'y':
@@ -659,14 +658,14 @@ func (r *Reader) decodeFieldValue(field Field, data []byte) (string, error) {
 		return "", nil
 
 	case 'M': // memo field (reference to external memo file)
-		return string(trimmed), nil
+		return string(bytes.TrimSpace(data)), nil
 
-	default: // unknown field type - try to decode as character
-		decoded, err := r.decoder.Bytes(trimmed)
+	default: // unknown field type - decode as character
+		decoded, err := r.decoder.Bytes(data)
 		if err != nil {
-			return string(trimmed), nil
+			return string(bytes.TrimRight(data, " ")), nil
 		}
-		return string(decoded), nil
+		return string(bytes.TrimRight(decoded, " ")), nil
 	}
 }
 
