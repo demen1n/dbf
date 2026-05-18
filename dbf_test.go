@@ -897,6 +897,48 @@ func TestErrAfterIOEOF(t *testing.T) {
 	}
 }
 
+// createLargeDBF builds a DBF with n records and 3 fields (NAME C/10, AGE N/3, ACTIVE L/1).
+func createLargeDBF(n int) []byte {
+	buf := new(bytes.Buffer)
+
+	buf.WriteByte(0x03)
+	buf.WriteByte(124)
+	buf.WriteByte(1)
+	buf.WriteByte(1)
+
+	binary.Write(buf, binary.LittleEndian, uint32(n))
+	binary.Write(buf, binary.LittleEndian, uint16(32+32*3+1)) // 3 fields
+	binary.Write(buf, binary.LittleEndian, uint16(1+10+3+1)) // deletion + NAME + AGE + ACTIVE
+
+	reserved := make([]byte, 20)
+	reserved[17] = 0x26 // CP866
+	buf.Write(reserved)
+
+	writeField := func(name string, typ byte, length byte) {
+		b := make([]byte, 11)
+		copy(b, name)
+		buf.Write(b)
+		buf.WriteByte(typ)
+		buf.Write(make([]byte, 4))
+		buf.WriteByte(length)
+		buf.WriteByte(0)
+		buf.Write(make([]byte, 14))
+	}
+	writeField("NAME", 'C', 10)
+	writeField("AGE", 'N', 3)
+	writeField("ACTIVE", 'L', 1)
+	buf.WriteByte(0x0D)
+
+	for i := 0; i < n; i++ {
+		buf.WriteByte(0x20)
+		buf.WriteString("Alice     ") // 10 bytes
+		buf.WriteString(" 25")        // 3 bytes
+		buf.WriteByte('T')            // 1 byte
+	}
+
+	return buf.Bytes()
+}
+
 // Benchmark tests
 func BenchmarkNew(b *testing.B) {
 	data := createMinimalDBF()
@@ -912,7 +954,7 @@ func BenchmarkNew(b *testing.B) {
 }
 
 func BenchmarkReadAll(b *testing.B) {
-	data := createMinimalDBF()
+	data := createLargeDBF(10_000)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -926,7 +968,7 @@ func BenchmarkReadAll(b *testing.B) {
 }
 
 func BenchmarkNextRead(b *testing.B) {
-	data := createMinimalDBF()
+	data := createLargeDBF(10_000)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
