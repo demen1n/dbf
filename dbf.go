@@ -605,8 +605,14 @@ func (r *Reader) Read() (*Record, error) {
 //	for _, record := range records {
 //		fmt.Println(record.Data["NAME"])
 //	}
+const maxInitialCap = 1 << 20 // 1M records initial cap limit
+
 func (r *Reader) ReadAll() ([]*Record, error) {
-	records := make([]*Record, 0, r.recordsCount)
+	cap := r.recordsCount
+	if cap > maxInitialCap {
+		cap = maxInitialCap
+	}
+	records := make([]*Record, 0, cap)
 
 	for r.Next() {
 		record, err := r.Read()
