@@ -50,6 +50,12 @@ func (ft FileType) String() string {
 		return "FoxBASE"
 	case FoxBASEPlusNoMemo:
 		return "FoxBASE+/Dbase III plus, no memo"
+	case dBASEIVNoMemo:
+		return "dBASE IV, no memo"
+	case dBASEVNoMemo:
+		return "dBASE 5, no memo"
+	case VisualObjects:
+		return "Visual Objects 1.0"
 	case VisualFoxPro:
 		return "Visual FoxPro"
 	case VisualFoxProAI:
@@ -60,16 +66,24 @@ func (ft FileType) String() string {
 		return "dBASE IV SQL table files, no memo"
 	case dBASEIVSF:
 		return "dBASE IV SQL system files, no memo"
+	case dBASEIVMemo2:
+		return "dBASE IV with memo"
 	case FoxBASEPlusMemo:
 		return "FoxBASE+/dBASE III PLUS, with memo"
+	case VisualObjectsMemo:
+		return "Visual Objects 1.0 with memo"
 	case dBASEIVMemo:
 		return "dBASE IV with memo"
+	case dBASEIVSQL:
+		return "dBASE IV with SQL table"
 	case dBASEIVTFMemo:
 		return "dBASE IV SQL table files with memo"
-	case FoxPro2:
-		return "FoxPro 2.x (or earlier) with memo"
 	case HiPerSix:
 		return "HiPer-Six format with SMT memo file"
+	case FoxPro2:
+		return "FoxPro 2.x (or earlier) with memo"
+	case FoxBASE2:
+		return "FoxBASE"
 	default:
 		return fmt.Sprintf("Unknown (0x%02X)", byte(ft))
 	}
@@ -79,16 +93,23 @@ func (ft FileType) String() string {
 const (
 	FoxBASE             FileType = 0x02
 	FoxBASEPlusNoMemo   FileType = 0x03
+	dBASEIVNoMemo       FileType = 0x04
+	dBASEVNoMemo        FileType = 0x05
+	VisualObjects       FileType = 0x07
 	VisualFoxPro        FileType = 0x30
 	VisualFoxProAI      FileType = 0x31
 	VisualFoxProVarchar FileType = 0x32
 	dBASEIVTF           FileType = 0x43
 	dBASEIVSF           FileType = 0x63
+	dBASEIVMemo2        FileType = 0x7B
 	FoxBASEPlusMemo     FileType = 0x83
+	VisualObjectsMemo   FileType = 0x87
 	dBASEIVMemo         FileType = 0x8B
+	dBASEIVSQL          FileType = 0x8E
 	dBASEIVTFMemo       FileType = 0xCB
-	FoxPro2             FileType = 0xF5
 	HiPerSix            FileType = 0xE5
+	FoxPro2             FileType = 0xF5
+	FoxBASE2            FileType = 0xFB
 )
 
 const (
@@ -391,9 +412,10 @@ func (r *Reader) readField() (Field, error) {
 // isValidFileType checks if the given file type is recognized.
 func isValidFileType(ft FileType) bool {
 	switch ft {
-	case FoxBASE, FoxBASEPlusNoMemo, VisualFoxPro, VisualFoxProAI,
-		VisualFoxProVarchar, dBASEIVTF, dBASEIVSF, FoxBASEPlusMemo,
-		dBASEIVMemo, dBASEIVTFMemo, FoxPro2, HiPerSix:
+	case FoxBASE, FoxBASEPlusNoMemo, dBASEIVNoMemo, dBASEVNoMemo,
+		VisualObjects, VisualFoxPro, VisualFoxProAI, VisualFoxProVarchar,
+		dBASEIVTF, dBASEIVSF, dBASEIVMemo2, FoxBASEPlusMemo, VisualObjectsMemo,
+		dBASEIVMemo, dBASEIVSQL, dBASEIVTFMemo, HiPerSix, FoxPro2, FoxBASE2:
 		return true
 	default:
 		return false
