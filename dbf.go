@@ -587,11 +587,7 @@ func (r *Reader) ReadAll() ([]*Record, error) {
 
 // Err returns any error that occurred during iteration.
 // It should be called after Next() returns false to check for errors.
-// Returns nil if iteration completed successfully (io.EOF is not returned).
 func (r *Reader) Err() error {
-	if r.err == io.EOF {
-		return nil
-	}
 	return r.err
 }
 
