@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/text/encoding"
@@ -640,12 +641,12 @@ func (r *Reader) Err() error {
 // decodeFieldValue decodes a field's raw bytes into a string based on its type.
 func (r *Reader) decodeFieldValue(field Field, data []byte) (string, error) {
 	switch field.Type {
-	case 'C': // character field: decode to UTF-8 first, then trim trailing spaces
+	case 'C': // character field: decode to UTF-8 first, then trim spaces
 		decoded, err := r.decoder.Bytes(data)
 		if err != nil {
-			return string(bytes.TrimRight(data, " ")), nil
+			return strings.TrimSpace(string(data)), nil
 		}
-		return string(bytes.TrimRight(decoded, " ")), nil
+		return strings.TrimSpace(string(decoded)), nil
 
 	case 'N', 'F': // numeric and Float fields (ASCII only)
 		return string(bytes.TrimSpace(data)), nil
@@ -671,9 +672,9 @@ func (r *Reader) decodeFieldValue(field Field, data []byte) (string, error) {
 	default: // unknown field type - decode as character
 		decoded, err := r.decoder.Bytes(data)
 		if err != nil {
-			return string(bytes.TrimRight(data, " ")), nil
+			return strings.TrimSpace(string(data)), nil
 		}
-		return string(bytes.TrimRight(decoded, " ")), nil
+		return strings.TrimSpace(string(decoded)), nil
 	}
 }
 
