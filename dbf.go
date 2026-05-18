@@ -31,6 +31,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -38,6 +39,18 @@ import (
 
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/charmap"
+)
+
+// Sentinel errors returned by the library.
+var (
+	ErrInvalidFileType   = errors.New("invalid file type")
+	ErrInvalidHeaderSize = errors.New("invalid header size")
+	ErrInvalidRecordSize = errors.New("invalid record size")
+	ErrUnknownEncoding   = errors.New("unable to determine encoding")
+	ErrInvalidTerminator = errors.New("invalid field descriptor terminator")
+	ErrFieldOutOfBounds  = errors.New("field exceeds record bounds")
+	ErrReadBeforeNext    = errors.New("Read called before Next")
+	ErrRecordSizeMismatch = errors.New("record size mismatch")
 )
 
 // FileType represents the type of DBF file format.
@@ -227,7 +240,7 @@ func New(r io.Reader, opts ...Option) (*Reader, error) {
 
 	// ensure we have an encoding
 	if reader.decoder == nil {
-		return nil, fmt.Errorf("unable to determine encoding: please specify encoding explicitly using WithCP866(), WithCP1251() or WithEncoding()")
+		return nil, fmt.Errorf("%w: please specify encoding explicitly using WithCP866(), WithCP1251() or WithEncoding()", ErrUnknownEncoding)
 	}
 
 	// read field descriptors
@@ -296,7 +309,7 @@ func (r *Reader) readMetadata() error {
 
 	fileType := FileType(b)
 	if !isValidFileType(fileType) {
-		return fmt.Errorf("unknown file type: 0x%02X", b)
+		return fmt.Errorf("%w: 0x%02X", ErrInvalidFileType, b)
 	}
 	r.fileType = fileType
 
@@ -329,7 +342,7 @@ func (r *Reader) readMetadata() error {
 	}
 	r.headerBytesNumber = binary.LittleEndian.Uint16(headerBytes)
 	if r.headerBytesNumber < metadataLength {
-		return fmt.Errorf("invalid header size: %d (must be >= %d)", r.headerBytesNumber, metadataLength)
+		return fmt.Errorf("%w: %d (must be >= %d)", ErrInvalidHeaderSize, r.headerBytesNumber, metadataLength)
 	}
 	r.fieldsCount = (r.headerBytesNumber - metadataLength) / fieldLength
 
@@ -340,7 +353,7 @@ func (r *Reader) readMetadata() error {
 	}
 	r.recordBytesNumber = binary.LittleEndian.Uint16(recordBytes)
 	if r.recordBytesNumber == 0 {
-		return fmt.Errorf("invalid record size: 0")
+		return fmt.Errorf("%w: 0", ErrInvalidRecordSize)
 	}
 
 	// read reserved bytes (20 bytes)
@@ -519,7 +532,7 @@ func (r *Reader) Read() (*Record, error) {
 	for _, field := range r.fields {
 		end := offset + int(field.Length)
 		if end > len(recordBytes) {
-			r.err = fmt.Errorf("field %s exceeds record bounds (offset %d + length %d > record size %d)", field.Name, offset, field.Length, len(recordBytes))
+			r.err = fmt.Errorf("%w: field %s (offset %d + length %d > record size %d)", ErrFieldOutOfBounds, field.Name, offset, field.Length, len(recordBytes))
 			return nil, r.err
 		}
 		fieldData := recordBytes[offset:end]

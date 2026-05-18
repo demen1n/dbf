@@ -3,6 +3,7 @@ package dbf
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -482,9 +483,8 @@ func TestEncodingAutodetectionFails(t *testing.T) {
 		t.Error("Expected error when encoding can't be determined, got nil")
 	}
 
-	// error message should be helpful
-	if !strings.Contains(err.Error(), "specify encoding explicitly") {
-		t.Errorf("Error message should mention explicit encoding, got: %v", err)
+	if !errors.Is(err, ErrUnknownEncoding) {
+		t.Errorf("Expected ErrUnknownEncoding, got: %v", err)
 	}
 }
 
