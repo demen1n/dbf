@@ -410,6 +410,15 @@ func (r *Reader) readFields() error {
 		}
 	}
 
+	// validate that declared field lengths are consistent with record size
+	var total uint32 = 1 // deletion flag byte
+	for _, f := range r.fields {
+		total += uint32(f.Length)
+	}
+	if total != uint32(r.recordBytesNumber) {
+		return fmt.Errorf("%w: fields sum to %d bytes but header declares %d", ErrRecordSizeMismatch, total, r.recordBytesNumber)
+	}
+
 	return nil
 }
 

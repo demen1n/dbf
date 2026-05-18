@@ -659,35 +659,29 @@ func TestFieldExceedsRecordBounds(t *testing.T) {
 	buf.WriteByte(1)
 	buf.WriteByte(15)
 
-	binary.Write(buf, binary.LittleEndian, uint32(1))          // 1 record
-	binary.Write(buf, binary.LittleEndian, uint16(32+32+1))    // 1 field
-	binary.Write(buf, binary.LittleEndian, uint16(5))          // record size = 5 (too small for 1+10)
+	binary.Write(buf, binary.LittleEndian, uint32(1))       // 1 record
+	binary.Write(buf, binary.LittleEndian, uint16(32+32+1)) // 1 field
+	binary.Write(buf, binary.LittleEndian, uint16(5))       // record size = 5 (too small for 1+10)
 	buf.Write(make([]byte, 20))
 
-	// field with length=10, but record only has 4 bytes after deletion flag
+	// field with length=10, but record size declares only 5 bytes total
 	name := append([]byte("NAME"), make([]byte, 7)...)
 	buf.Write(name)
 	buf.WriteByte('C')
 	buf.Write(make([]byte, 4))
-	buf.WriteByte(10) // length > available space
+	buf.WriteByte(10) // declared length inconsistent with record size
 	buf.WriteByte(0)
 	buf.Write(make([]byte, 14))
 	buf.WriteByte(0x0D)
-
-	// record bytes (5 bytes)
 	buf.Write(make([]byte, 5))
 
-	reader, err := New(bytes.NewReader(buf.Bytes()), WithCP866())
-	if err != nil {
-		t.Fatalf("New() failed: %v", err)
-	}
-
-	if !reader.Next() {
-		t.Fatal("Next() returned false")
-	}
-	_, err = reader.Read()
+	// New() now catches the mismatch at construction time
+	_, err := New(bytes.NewReader(buf.Bytes()), WithCP866())
 	if err == nil {
-		t.Error("Expected error when field exceeds record bounds, got nil")
+		t.Error("Expected error for field lengths exceeding record size, got nil")
+	}
+	if !errors.Is(err, ErrRecordSizeMismatch) {
+		t.Errorf("Expected ErrRecordSizeMismatch, got: %v", err)
 	}
 }
 
