@@ -715,16 +715,23 @@ func TestFileTypeStringAllVariants(t *testing.T) {
 	}{
 		{FoxBASE, "FoxBASE"},
 		{FoxBASEPlusNoMemo, "no memo"},
+		{dBASEIVNoMemo, "dBASE IV"},
+		{dBASEVNoMemo, "dBASE 5"},
+		{VisualObjects, "Visual Objects"},
 		{VisualFoxPro, "Visual FoxPro"},
 		{VisualFoxProAI, "autoincrement"},
 		{VisualFoxProVarchar, "Varchar"},
 		{dBASEIVTF, "SQL table"},
 		{dBASEIVSF, "SQL system"},
+		{dBASEIVMemo2, "memo"},
 		{FoxBASEPlusMemo, "with memo"},
+		{VisualObjectsMemo, "Visual Objects"},
 		{dBASEIVMemo, "dBASE IV with memo"},
+		{dBASEIVSQL, "SQL table"},
 		{dBASEIVTFMemo, "SQL table files with memo"},
-		{FoxPro2, "FoxPro 2"},
 		{HiPerSix, "HiPer-Six"},
+		{FoxPro2, "FoxPro 2"},
+		{FoxBASE2, "FoxBASE"},
 		{FileType(0xAB), "Unknown"},
 	}
 	for _, tt := range tests {
@@ -732,6 +739,123 @@ func TestFileTypeStringAllVariants(t *testing.T) {
 		if !strings.Contains(s, tt.contains) {
 			t.Errorf("FileType(0x%02X).String() = %q, want it to contain %q", byte(tt.ft), s, tt.contains)
 		}
+	}
+}
+
+// createVFPDBFWithLongCharField creates a VFP DBF with a C field whose length > 255.
+func createVFPDBFWithLongCharField(fieldLen uint16) []byte {
+	buf := new(bytes.Buffer)
+
+	buf.WriteByte(byte(VisualFoxPro)) // VFP file type
+	buf.WriteByte(124)
+	buf.WriteByte(1)
+	buf.WriteByte(1)
+
+	binary.Write(buf, binary.LittleEndian, uint32(1))         // 1 record
+	binary.Write(buf, binary.LittleEndian, uint16(32+32+1))   // 1 field
+	binary.Write(buf, binary.LittleEndian, uint16(1+fieldLen)) // deletion + field
+
+	reserved := make([]byte, 20)
+	reserved[17] = 0x03 // CP1252
+	buf.Write(reserved)
+
+	// field descriptor with 2-byte length in bytes 16-17
+	name := make([]byte, 11)
+	copy(name, "LONGNAME")
+	buf.Write(name)
+	buf.WriteByte('C')
+	buf.Write(make([]byte, 4))
+	// VFP stores C length as little-endian uint16 across bytes 16-17
+	binary.Write(buf, binary.LittleEndian, fieldLen)
+	buf.Write(make([]byte, 14))
+	buf.WriteByte(0x0D)
+
+	// record: deletion flag + fieldLen spaces
+	buf.WriteByte(0x20)
+	value := make([]byte, fieldLen)
+	copy(value, "Hello VFP")
+	for i := len("Hello VFP"); i < int(fieldLen); i++ {
+		value[i] = ' '
+	}
+	buf.Write(value)
+
+	return buf.Bytes()
+}
+
+func TestVFPCharacterFieldLength(t *testing.T) {
+	data := createVFPDBFWithLongCharField(300)
+	r, err := New(bytes.NewReader(data), WithCP1252())
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	fields := r.Fields()
+	if len(fields) != 1 {
+		t.Fatalf("Expected 1 field, got %d", len(fields))
+	}
+	if fields[0].Length != 300 {
+		t.Errorf("Expected field length 300, got %d", fields[0].Length)
+	}
+
+	records, err := r.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll() failed: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("Expected 1 record, got %d", len(records))
+	}
+	if records[0].Data["LONGNAME"] != "Hello VFP" {
+		t.Errorf("Expected 'Hello VFP', got %q", records[0].Data["LONGNAME"])
+	}
+}
+
+func TestHeaderPaddingSkip(t *testing.T) {
+	buf := new(bytes.Buffer)
+
+	buf.WriteByte(0x03)
+	buf.WriteByte(124)
+	buf.WriteByte(1)
+	buf.WriteByte(15)
+
+	// declare a larger header than just fields+terminator (extra 10 bytes padding)
+	binary.Write(buf, binary.LittleEndian, uint32(1))
+	binary.Write(buf, binary.LittleEndian, uint16(32+32+1+10)) // 10 extra padding bytes
+	binary.Write(buf, binary.LittleEndian, uint16(1+5))        // deletion + 5-byte field
+
+	reserved := make([]byte, 20)
+	reserved[17] = 0x26 // CP866
+	buf.Write(reserved)
+
+	name := make([]byte, 11)
+	copy(name, "ID")
+	buf.Write(name)
+	buf.WriteByte('C')
+	buf.Write(make([]byte, 4))
+	buf.WriteByte(5)
+	buf.WriteByte(0)
+	buf.Write(make([]byte, 14))
+	buf.WriteByte(0x0D)
+
+	buf.Write(make([]byte, 10)) // padding between terminator and records
+
+	// record
+	buf.WriteByte(0x20)
+	buf.WriteString("AB   ")
+
+	r, err := New(bytes.NewReader(buf.Bytes()), WithCP866())
+	if err != nil {
+		t.Fatalf("New() with padded header failed: %v", err)
+	}
+
+	records, err := r.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll() failed: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("Expected 1 record, got %d", len(records))
+	}
+	if records[0].Data["ID"] != "AB" {
+		t.Errorf("Expected 'AB', got %q", records[0].Data["ID"])
 	}
 }
 
