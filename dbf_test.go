@@ -624,8 +624,8 @@ func TestZeroRecords(t *testing.T) {
 func TestInvalidHeaderSize(t *testing.T) {
 	buf := new(bytes.Buffer)
 	buf.WriteByte(0x03)
-	buf.Write(make([]byte, 3))  // date
-	buf.Write(make([]byte, 4))  // record count
+	buf.Write(make([]byte, 3))                         // date
+	buf.Write(make([]byte, 4))                         // record count
 	binary.Write(buf, binary.LittleEndian, uint16(10)) // header < 32 (metadataLength)
 	binary.Write(buf, binary.LittleEndian, uint16(11)) // record size
 	buf.Write(make([]byte, 20))
@@ -675,7 +675,7 @@ func TestFieldExceedsRecordBounds(t *testing.T) {
 	buf.WriteByte(0x0D)
 	buf.Write(make([]byte, 5))
 
-	// New() now catches the mismatch at construction time
+	// new() now catches the mismatch at construction time
 	_, err := New(bytes.NewReader(buf.Bytes()), WithCP866())
 	if err == nil {
 		t.Error("Expected error for field lengths exceeding record size, got nil")
@@ -751,8 +751,8 @@ func createVFPDBFWithLongCharField(fieldLen uint16) []byte {
 	buf.WriteByte(1)
 	buf.WriteByte(1)
 
-	binary.Write(buf, binary.LittleEndian, uint32(1))         // 1 record
-	binary.Write(buf, binary.LittleEndian, uint16(32+32+1))   // 1 field
+	binary.Write(buf, binary.LittleEndian, uint32(1))          // 1 record
+	binary.Write(buf, binary.LittleEndian, uint16(32+32+1))    // 1 field
 	binary.Write(buf, binary.LittleEndian, uint16(1+fieldLen)) // deletion + field
 
 	reserved := make([]byte, 20)
@@ -949,13 +949,13 @@ func TestDecodeFieldValueLogicalAndFloat(t *testing.T) {
 		t.Errorf("record[5] ACTIVE: expected \"\", got %q", records[5].Data["ACTIVE"])
 	}
 
-	// Float field returned as trimmed string
+	// float field returned as trimmed string
 	score := strings.TrimSpace(records[0].Data["SCORE"])
 	if score != "3.14" {
 		t.Errorf("record[0] SCORE: expected \"3.14\", got %q", score)
 	}
 
-	// Memo field returned as trimmed string
+	// memo field returned as trimmed string
 	note := strings.TrimSpace(records[0].Data["NOTE"])
 	if note != "memo1" {
 		t.Errorf("record[0] NOTE: expected \"memo1\", got %q", note)
@@ -1015,7 +1015,7 @@ func TestErrAfterIOEOF(t *testing.T) {
 	for r.Next() {
 		r.Read() //nolint
 	}
-	// Err() must not expose io.EOF
+	// err() must not expose io.EOF
 	if err := r.Err(); err != nil && err.Error() == "EOF" {
 		t.Error("Err() must not return raw io.EOF")
 	}
@@ -1032,7 +1032,7 @@ func createLargeDBF(n int) []byte {
 
 	binary.Write(buf, binary.LittleEndian, uint32(n))
 	binary.Write(buf, binary.LittleEndian, uint16(32+32*3+1)) // 3 fields
-	binary.Write(buf, binary.LittleEndian, uint16(1+10+3+1)) // deletion + NAME + AGE + ACTIVE
+	binary.Write(buf, binary.LittleEndian, uint16(1+10+3+1))  // deletion + NAME + AGE + ACTIVE
 
 	reserved := make([]byte, 20)
 	reserved[17] = 0x26 // CP866

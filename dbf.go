@@ -43,13 +43,13 @@ import (
 
 // Sentinel errors returned by the library.
 var (
-	ErrInvalidFileType   = errors.New("invalid file type")
-	ErrInvalidHeaderSize = errors.New("invalid header size")
-	ErrInvalidRecordSize = errors.New("invalid record size")
-	ErrUnknownEncoding   = errors.New("unable to determine encoding")
-	ErrInvalidTerminator = errors.New("invalid field descriptor terminator")
-	ErrFieldOutOfBounds  = errors.New("field exceeds record bounds")
-	ErrReadBeforeNext    = errors.New("Read called before Next")
+	ErrInvalidFileType    = errors.New("invalid file type")
+	ErrInvalidHeaderSize  = errors.New("invalid header size")
+	ErrInvalidRecordSize  = errors.New("invalid record size")
+	ErrUnknownEncoding    = errors.New("unable to determine encoding")
+	ErrInvalidTerminator  = errors.New("invalid field descriptor terminator")
+	ErrFieldOutOfBounds   = errors.New("field exceeds record bounds")
+	ErrReadBeforeNext     = errors.New("Read called before Next")
 	ErrRecordSizeMismatch = errors.New("record size mismatch")
 )
 
@@ -175,7 +175,7 @@ type Reader struct {
 	decoder       *encoding.Decoder
 	reader        *bufio.Reader
 	currentRecord uint32 // number of records advanced by Next()
-	pending       bool   // Next() was called and Read() has not yet consumed the record
+	pending       bool   // next() was called and Read() has not yet consumed the record
 	err           error  // last error during reading
 
 	file *os.File
@@ -443,7 +443,7 @@ func (r *Reader) readField() (Field, error) {
 	var length uint16
 	var decimalCount byte
 
-	// Visual FoxPro stores character field length as a little-endian uint16 in bytes 16-17.
+	// visual FoxPro stores character field length as a little-endian uint16 in bytes 16-17.
 	isVFPChar := fieldType == 'C' && (r.fileType == VisualFoxPro || r.fileType == VisualFoxProAI || r.fileType == VisualFoxProVarchar)
 	if isVFPChar {
 		length = binary.LittleEndian.Uint16(fieldBytes[16:18])
