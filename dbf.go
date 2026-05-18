@@ -376,25 +376,38 @@ func (r *Reader) readMetadata() error {
 	return nil
 }
 
-// readFields reads all field descriptors from the DBF header.
+// readFields reads field descriptors until the 0x0D terminator, then skips
+// any remaining header padding so the reader is positioned at the first record.
 func (r *Reader) readFields() error {
 	r.fields = make([]Field, 0, r.fieldsCount)
 
-	for i := uint16(0); i < r.fieldsCount; i++ {
+	for {
+		b, err := r.reader.ReadByte()
+		if err != nil {
+			return fmt.Errorf("read field or terminator: %w", err)
+		}
+		if b == 0x0D {
+			break
+		}
+		if err := r.reader.UnreadByte(); err != nil {
+			return fmt.Errorf("unread byte: %w", err)
+		}
+
 		field, err := r.readField()
 		if err != nil {
-			return fmt.Errorf("read field %d: %w", i, err)
+			return fmt.Errorf("read field %d: %w", len(r.fields), err)
 		}
 		r.fields = append(r.fields, field)
 	}
 
-	// read field descriptor terminator (0x0D)
-	terminator, err := r.reader.ReadByte()
-	if err != nil {
-		return fmt.Errorf("read terminator: %w", err)
-	}
-	if terminator != 0x0D {
-		return fmt.Errorf("invalid field descriptor terminator: 0x%02X, expected 0x0D", terminator)
+	// skip any padding between terminator and start of record data
+	// (e.g. Visual FoxPro backlink area or other extensions)
+	consumed := metadataLength + uint16(len(r.fields))*fieldLength + 1
+	if r.headerBytesNumber > consumed {
+		skip := int64(r.headerBytesNumber - consumed)
+		if _, err := io.CopyN(io.Discard, r.reader, skip); err != nil {
+			return fmt.Errorf("skip header padding: %w", err)
+		}
 	}
 
 	return nil
