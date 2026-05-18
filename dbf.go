@@ -135,7 +135,7 @@ type Field struct {
 	Name          string // field name (max 11 characters)
 	Type          byte   // field type (C=Character, N=Numeric, D=Date, L=Logical, M=Memo, F=Float)
 	MemoryAddress uint32 // memory address (reserved, not used in file-based DBF)
-	Length        byte   // field length in bytes
+	Length        uint16 // field length in bytes; uint16 to support VFP character fields > 255 bytes
 	DecimalCount  byte   // number of decimal places (for numeric fields)
 }
 
@@ -415,12 +415,25 @@ func (r *Reader) readField() (Field, error) {
 		decodedName = nameBytes
 	}
 
+	fieldType := fieldBytes[11]
+	var length uint16
+	var decimalCount byte
+
+	// Visual FoxPro stores character field length as a little-endian uint16 in bytes 16-17.
+	isVFPChar := fieldType == 'C' && (r.fileType == VisualFoxPro || r.fileType == VisualFoxProAI || r.fileType == VisualFoxProVarchar)
+	if isVFPChar {
+		length = binary.LittleEndian.Uint16(fieldBytes[16:18])
+	} else {
+		length = uint16(fieldBytes[16])
+		decimalCount = fieldBytes[17]
+	}
+
 	field := Field{
 		Name:          string(decodedName),
-		Type:          fieldBytes[11],
+		Type:          fieldType,
 		MemoryAddress: binary.LittleEndian.Uint32(fieldBytes[12:16]),
-		Length:        fieldBytes[16],
-		DecimalCount:  fieldBytes[17],
+		Length:        length,
+		DecimalCount:  decimalCount,
 	}
 
 	return field, nil
