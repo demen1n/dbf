@@ -31,13 +31,27 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/charmap"
+)
+
+// Sentinel errors returned by the library.
+var (
+	ErrInvalidFileType    = errors.New("invalid file type")
+	ErrInvalidHeaderSize  = errors.New("invalid header size")
+	ErrInvalidRecordSize  = errors.New("invalid record size")
+	ErrUnknownEncoding    = errors.New("unable to determine encoding")
+	ErrInvalidTerminator  = errors.New("invalid field descriptor terminator")
+	ErrFieldOutOfBounds   = errors.New("field exceeds record bounds")
+	ErrReadBeforeNext     = errors.New("Read called before Next")
+	ErrRecordSizeMismatch = errors.New("record size mismatch")
 )
 
 // FileType represents the type of DBF file format.
@@ -50,6 +64,12 @@ func (ft FileType) String() string {
 		return "FoxBASE"
 	case FoxBASEPlusNoMemo:
 		return "FoxBASE+/Dbase III plus, no memo"
+	case dBASEIVNoMemo:
+		return "dBASE IV, no memo"
+	case dBASEVNoMemo:
+		return "dBASE 5, no memo"
+	case VisualObjects:
+		return "Visual Objects 1.0"
 	case VisualFoxPro:
 		return "Visual FoxPro"
 	case VisualFoxProAI:
@@ -60,16 +80,24 @@ func (ft FileType) String() string {
 		return "dBASE IV SQL table files, no memo"
 	case dBASEIVSF:
 		return "dBASE IV SQL system files, no memo"
+	case dBASEIVMemo2:
+		return "dBASE IV with memo"
 	case FoxBASEPlusMemo:
 		return "FoxBASE+/dBASE III PLUS, with memo"
+	case VisualObjectsMemo:
+		return "Visual Objects 1.0 with memo"
 	case dBASEIVMemo:
 		return "dBASE IV with memo"
+	case dBASEIVSQL:
+		return "dBASE IV with SQL table"
 	case dBASEIVTFMemo:
 		return "dBASE IV SQL table files with memo"
-	case FoxPro2:
-		return "FoxPro 2.x (or earlier) with memo"
 	case HiPerSix:
 		return "HiPer-Six format with SMT memo file"
+	case FoxPro2:
+		return "FoxPro 2.x (or earlier) with memo"
+	case FoxBASE2:
+		return "FoxBASE"
 	default:
 		return fmt.Sprintf("Unknown (0x%02X)", byte(ft))
 	}
@@ -79,16 +107,23 @@ func (ft FileType) String() string {
 const (
 	FoxBASE             FileType = 0x02
 	FoxBASEPlusNoMemo   FileType = 0x03
+	dBASEIVNoMemo       FileType = 0x04
+	dBASEVNoMemo        FileType = 0x05
+	VisualObjects       FileType = 0x07
 	VisualFoxPro        FileType = 0x30
 	VisualFoxProAI      FileType = 0x31
 	VisualFoxProVarchar FileType = 0x32
 	dBASEIVTF           FileType = 0x43
 	dBASEIVSF           FileType = 0x63
+	dBASEIVMemo2        FileType = 0x7B
 	FoxBASEPlusMemo     FileType = 0x83
+	VisualObjectsMemo   FileType = 0x87
 	dBASEIVMemo         FileType = 0x8B
+	dBASEIVSQL          FileType = 0x8E
 	dBASEIVTFMemo       FileType = 0xCB
-	FoxPro2             FileType = 0xF5
 	HiPerSix            FileType = 0xE5
+	FoxPro2             FileType = 0xF5
+	FoxBASE2            FileType = 0xFB
 )
 
 const (
@@ -101,7 +136,7 @@ type Field struct {
 	Name          string // field name (max 11 characters)
 	Type          byte   // field type (C=Character, N=Numeric, D=Date, L=Logical, M=Memo, F=Float)
 	MemoryAddress uint32 // memory address (reserved, not used in file-based DBF)
-	Length        byte   // field length in bytes
+	Length        uint16 // field length in bytes; uint16 to support VFP character fields > 255 bytes
 	DecimalCount  byte   // number of decimal places (for numeric fields)
 }
 
@@ -127,6 +162,8 @@ func (f Field) TypeString() string {
 
 // Reader provides methods for reading DBF files.
 // It supports both streaming (Next/Read) and batch (ReadAll) reading modes.
+//
+// Reader is not safe for concurrent use.
 type Reader struct {
 	fileType          FileType
 	lastUpdate        time.Time
@@ -138,7 +175,8 @@ type Reader struct {
 
 	decoder       *encoding.Decoder
 	reader        *bufio.Reader
-	currentRecord uint32 // current position for Next()
+	currentRecord uint32 // number of records advanced by Next()
+	pending       bool   // next() was called and Read() has not yet consumed the record
 	err           error  // last error during reading
 
 	file *os.File
@@ -149,9 +187,12 @@ type Option func(*Reader)
 
 // WithDecoder sets a custom text encoding decoder for reading character fields.
 // This is the most flexible option, allowing any encoding.Decoder to be used.
+// A nil decoder is ignored; pass WithEncoding or WithCP* to set encoding explicitly.
 func WithDecoder(decoder *encoding.Decoder) Option {
 	return func(r *Reader) {
-		r.decoder = decoder
+		if decoder != nil {
+			r.decoder = decoder
+		}
 	}
 }
 
@@ -206,7 +247,7 @@ func New(r io.Reader, opts ...Option) (*Reader, error) {
 
 	// ensure we have an encoding
 	if reader.decoder == nil {
-		return nil, fmt.Errorf("unable to determine encoding: please specify encoding explicitly using WithCP866(), WithCP1251() or WithEncoding()")
+		return nil, fmt.Errorf("%w: please specify encoding explicitly using WithCP866(), WithCP1251() or WithEncoding()", ErrUnknownEncoding)
 	}
 
 	// read field descriptors
@@ -275,7 +316,7 @@ func (r *Reader) readMetadata() error {
 
 	fileType := FileType(b)
 	if !isValidFileType(fileType) {
-		return fmt.Errorf("unknown file type: 0x%02X", b)
+		return fmt.Errorf("%w: 0x%02X", ErrInvalidFileType, b)
 	}
 	r.fileType = fileType
 
@@ -308,7 +349,7 @@ func (r *Reader) readMetadata() error {
 	}
 	r.headerBytesNumber = binary.LittleEndian.Uint16(headerBytes)
 	if r.headerBytesNumber < metadataLength {
-		return fmt.Errorf("invalid header size: %d (must be >= %d)", r.headerBytesNumber, metadataLength)
+		return fmt.Errorf("%w: %d (must be >= %d)", ErrInvalidHeaderSize, r.headerBytesNumber, metadataLength)
 	}
 	r.fieldsCount = (r.headerBytesNumber - metadataLength) / fieldLength
 
@@ -319,7 +360,7 @@ func (r *Reader) readMetadata() error {
 	}
 	r.recordBytesNumber = binary.LittleEndian.Uint16(recordBytes)
 	if r.recordBytesNumber == 0 {
-		return fmt.Errorf("invalid record size: 0")
+		return fmt.Errorf("%w: 0", ErrInvalidRecordSize)
 	}
 
 	// read reserved bytes (20 bytes)
@@ -338,25 +379,47 @@ func (r *Reader) readMetadata() error {
 	return nil
 }
 
-// readFields reads all field descriptors from the DBF header.
+// readFields reads field descriptors until the 0x0D terminator, then skips
+// any remaining header padding so the reader is positioned at the first record.
 func (r *Reader) readFields() error {
 	r.fields = make([]Field, 0, r.fieldsCount)
 
-	for i := uint16(0); i < r.fieldsCount; i++ {
+	for {
+		b, err := r.reader.ReadByte()
+		if err != nil {
+			return fmt.Errorf("read field or terminator: %w", err)
+		}
+		if b == 0x0D {
+			break
+		}
+		if err := r.reader.UnreadByte(); err != nil {
+			return fmt.Errorf("unread byte: %w", err)
+		}
+
 		field, err := r.readField()
 		if err != nil {
-			return fmt.Errorf("read field %d: %w", i, err)
+			return fmt.Errorf("read field %d: %w", len(r.fields), err)
 		}
 		r.fields = append(r.fields, field)
 	}
 
-	// read field descriptor terminator (0x0D)
-	terminator, err := r.reader.ReadByte()
-	if err != nil {
-		return fmt.Errorf("read terminator: %w", err)
+	// skip any padding between terminator and start of record data
+	// (e.g. Visual FoxPro backlink area or other extensions)
+	consumed := metadataLength + uint16(len(r.fields))*fieldLength + 1
+	if r.headerBytesNumber > consumed {
+		skip := int64(r.headerBytesNumber - consumed)
+		if _, err := io.CopyN(io.Discard, r.reader, skip); err != nil {
+			return fmt.Errorf("skip header padding: %w", err)
+		}
 	}
-	if terminator != 0x0D {
-		return fmt.Errorf("invalid field descriptor terminator: 0x%02X, expected 0x0D", terminator)
+
+	// validate that declared field lengths are consistent with record size
+	var total uint32 = 1 // deletion flag byte
+	for _, f := range r.fields {
+		total += uint32(f.Length)
+	}
+	if total != uint32(r.recordBytesNumber) {
+		return fmt.Errorf("%w: fields sum to %d bytes but header declares %d", ErrRecordSizeMismatch, total, r.recordBytesNumber)
 	}
 
 	return nil
@@ -377,12 +440,25 @@ func (r *Reader) readField() (Field, error) {
 		decodedName = nameBytes
 	}
 
+	fieldType := fieldBytes[11]
+	var length uint16
+	var decimalCount byte
+
+	// visual FoxPro stores character field length as a little-endian uint16 in bytes 16-17.
+	isVFPChar := fieldType == 'C' && (r.fileType == VisualFoxPro || r.fileType == VisualFoxProAI || r.fileType == VisualFoxProVarchar)
+	if isVFPChar {
+		length = binary.LittleEndian.Uint16(fieldBytes[16:18])
+	} else {
+		length = uint16(fieldBytes[16])
+		decimalCount = fieldBytes[17]
+	}
+
 	field := Field{
 		Name:          string(decodedName),
-		Type:          fieldBytes[11],
+		Type:          fieldType,
 		MemoryAddress: binary.LittleEndian.Uint32(fieldBytes[12:16]),
-		Length:        fieldBytes[16],
-		DecimalCount:  fieldBytes[17],
+		Length:        length,
+		DecimalCount:  decimalCount,
 	}
 
 	return field, nil
@@ -391,9 +467,10 @@ func (r *Reader) readField() (Field, error) {
 // isValidFileType checks if the given file type is recognized.
 func isValidFileType(ft FileType) bool {
 	switch ft {
-	case FoxBASE, FoxBASEPlusNoMemo, VisualFoxPro, VisualFoxProAI,
-		VisualFoxProVarchar, dBASEIVTF, dBASEIVSF, FoxBASEPlusMemo,
-		dBASEIVMemo, dBASEIVTFMemo, FoxPro2, HiPerSix:
+	case FoxBASE, FoxBASEPlusNoMemo, dBASEIVNoMemo, dBASEVNoMemo,
+		VisualObjects, VisualFoxPro, VisualFoxProAI, VisualFoxProVarchar,
+		dBASEIVTF, dBASEIVSF, dBASEIVMemo2, FoxBASEPlusMemo, VisualObjectsMemo,
+		dBASEIVMemo, dBASEIVSQL, dBASEIVTFMemo, HiPerSix, FoxPro2, FoxBASE2:
 		return true
 	default:
 		return false
@@ -462,12 +539,13 @@ type Record struct {
 //		log.Fatal(err)
 //	}
 func (r *Reader) Next() bool {
-	if r.currentRecord >= r.recordsCount {
+	if r.err != nil || r.currentRecord >= r.recordsCount {
 		return false
 	}
 
 	r.currentRecord++
-	return r.err == nil
+	r.pending = true
+	return true
 }
 
 // Read reads the current record. Must be called after a successful Next() call.
@@ -476,9 +554,10 @@ func (r *Reader) Read() (*Record, error) {
 	if r.err != nil {
 		return nil, r.err
 	}
-	if r.currentRecord == 0 {
-		return nil, fmt.Errorf("Read called before Next")
+	if !r.pending {
+		return nil, ErrReadBeforeNext
 	}
+	r.pending = false
 
 	// read the entire record
 	recordBytes := make([]byte, r.recordBytesNumber)
@@ -497,7 +576,7 @@ func (r *Reader) Read() (*Record, error) {
 	for _, field := range r.fields {
 		end := offset + int(field.Length)
 		if end > len(recordBytes) {
-			r.err = fmt.Errorf("field %s exceeds record bounds (offset %d + length %d > record size %d)", field.Name, offset, field.Length, len(recordBytes))
+			r.err = fmt.Errorf("%w: field %s (offset %d + length %d > record size %d)", ErrFieldOutOfBounds, field.Name, offset, field.Length, len(recordBytes))
 			return nil, r.err
 		}
 		fieldData := recordBytes[offset:end]
@@ -529,8 +608,14 @@ func (r *Reader) Read() (*Record, error) {
 //	for _, record := range records {
 //		fmt.Println(record.Data["NAME"])
 //	}
+const maxInitialCap = 1 << 20 // 1M records initial cap limit
+
 func (r *Reader) ReadAll() ([]*Record, error) {
-	records := make([]*Record, 0, r.recordsCount)
+	cap := r.recordsCount
+	if cap > maxInitialCap {
+		cap = maxInitialCap
+	}
+	records := make([]*Record, 0, cap)
 
 	for r.Next() {
 		record, err := r.Read()
@@ -549,33 +634,28 @@ func (r *Reader) ReadAll() ([]*Record, error) {
 
 // Err returns any error that occurred during iteration.
 // It should be called after Next() returns false to check for errors.
-// Returns nil if iteration completed successfully (io.EOF is not returned).
 func (r *Reader) Err() error {
-	if r.err == io.EOF {
-		return nil
-	}
 	return r.err
 }
 
 // decodeFieldValue decodes a field's raw bytes into a string based on its type.
 func (r *Reader) decodeFieldValue(field Field, data []byte) (string, error) {
-	trimmed := bytes.TrimSpace(data)
-
 	switch field.Type {
-	case 'C': // character field
-		decoded, err := r.decoder.Bytes(trimmed)
+	case 'C': // character field: decode to UTF-8 first, then trim spaces
+		decoded, err := r.decoder.Bytes(data)
 		if err != nil {
-			return string(trimmed), nil // fallback to raw bytes
+			return strings.TrimSpace(string(data)), nil
 		}
-		return string(decoded), nil
+		return strings.TrimSpace(string(decoded)), nil
 
-	case 'N', 'F': // numeric and Float fields
-		return string(trimmed), nil
+	case 'N', 'F': // numeric and Float fields (ASCII only)
+		return string(bytes.TrimSpace(data)), nil
 
-	case 'D': // date field (format: YYYYMMDD)
-		return string(trimmed), nil
+	case 'D': // date field (format: YYYYMMDD, ASCII only)
+		return string(bytes.TrimSpace(data)), nil
 
 	case 'L': // logical field (boolean)
+		trimmed := bytes.TrimSpace(data)
 		if len(trimmed) > 0 {
 			switch trimmed[0] {
 			case 'T', 't', 'Y', 'y':
@@ -587,20 +667,22 @@ func (r *Reader) decodeFieldValue(field Field, data []byte) (string, error) {
 		return "", nil
 
 	case 'M': // memo field (reference to external memo file)
-		return string(trimmed), nil
+		return string(bytes.TrimSpace(data)), nil
 
-	default: // unknown field type - try to decode as character
-		decoded, err := r.decoder.Bytes(trimmed)
+	default: // unknown field type - decode as character
+		decoded, err := r.decoder.Bytes(data)
 		if err != nil {
-			return string(trimmed), nil
+			return strings.TrimSpace(string(data)), nil
 		}
-		return string(decoded), nil
+		return strings.TrimSpace(string(decoded)), nil
 	}
 }
 
 func (r *Reader) Close() error {
 	if r.file != nil {
-		return r.file.Close()
+		err := r.file.Close()
+		r.file = nil
+		return err
 	}
 	return nil
 }
