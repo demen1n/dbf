@@ -184,9 +184,12 @@ type Option func(*Reader)
 
 // WithDecoder sets a custom text encoding decoder for reading character fields.
 // This is the most flexible option, allowing any encoding.Decoder to be used.
+// A nil decoder is ignored; pass WithEncoding or WithCP* to set encoding explicitly.
 func WithDecoder(decoder *encoding.Decoder) Option {
 	return func(r *Reader) {
-		r.decoder = decoder
+		if decoder != nil {
+			r.decoder = decoder
+		}
 	}
 }
 
