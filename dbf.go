@@ -172,7 +172,8 @@ type Reader struct {
 
 	decoder       *encoding.Decoder
 	reader        *bufio.Reader
-	currentRecord uint32 // current position for Next()
+	currentRecord uint32 // number of records advanced by Next()
+	pending       bool   // Next() was called and Read() has not yet consumed the record
 	err           error  // last error during reading
 
 	file *os.File
@@ -497,12 +498,13 @@ type Record struct {
 //		log.Fatal(err)
 //	}
 func (r *Reader) Next() bool {
-	if r.currentRecord >= r.recordsCount {
+	if r.err != nil || r.currentRecord >= r.recordsCount {
 		return false
 	}
 
 	r.currentRecord++
-	return r.err == nil
+	r.pending = true
+	return true
 }
 
 // Read reads the current record. Must be called after a successful Next() call.
@@ -511,9 +513,10 @@ func (r *Reader) Read() (*Record, error) {
 	if r.err != nil {
 		return nil, r.err
 	}
-	if r.currentRecord == 0 {
-		return nil, fmt.Errorf("Read called before Next")
+	if !r.pending {
+		return nil, ErrReadBeforeNext
 	}
+	r.pending = false
 
 	// read the entire record
 	recordBytes := make([]byte, r.recordBytesNumber)
