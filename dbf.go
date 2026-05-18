@@ -161,6 +161,8 @@ func (f Field) TypeString() string {
 
 // Reader provides methods for reading DBF files.
 // It supports both streaming (Next/Read) and batch (ReadAll) reading modes.
+//
+// Reader is not safe for concurrent use.
 type Reader struct {
 	fileType          FileType
 	lastUpdate        time.Time
